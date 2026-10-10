@@ -25,6 +25,14 @@ replace the current model. Load timings are printed to stdout:
 
     fixture.step: parse 5.6 ms | transfer 11.9 ms | tessellate 93.0 ms (23600 triangles) | first frame 12.7 ms
 
+## Install
+
+    make install
+
+Builds, then installs into `~/.local` (override with `PREFIX=...`): the binary, the icon,
+a `model/step` MIME type for `*.step` / `*.stp`, and a desktop entry, and makes StepView
+the default application for STEP files. `make uninstall` removes the installed files.
+
 ## Controls
 
 | Input              | Action                              |

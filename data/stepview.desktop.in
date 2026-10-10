@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=StepView
+Comment=View STEP CAD models
+Exec=@BINDIR@/stepview %f
+Icon=stepview
+Terminal=false
+Categories=Graphics;3DGraphics;Viewer;
+MimeType=model/step;
+StartupWMClass=stepview

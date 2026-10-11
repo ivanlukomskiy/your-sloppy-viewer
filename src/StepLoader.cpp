@@ -90,7 +90,7 @@ StepLoadResult loadChecked(const std::filesystem::path& path)
   }
 
   start = Clock::now();
-  model.document = new TDocStd_Document("StepView");
+  model.document = new TDocStd_Document("XCAF");
   if (!reader.Transfer(model.document))
   {
     return fail("the STEP entities could not be converted to geometry");

@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=StepView
+Name=Your Sloppy Viewer
 Comment=View STEP CAD models
-Exec=@BINDIR@/stepview %f
-Icon=stepview
+Exec=@BINDIR@/your-sloppy-viewer %f
+Icon=your-sloppy-viewer
 Terminal=false
 Categories=Graphics;3DGraphics;Viewer;
 MimeType=model/step;
-StartupWMClass=stepview
+StartupWMClass=your-sloppy-viewer

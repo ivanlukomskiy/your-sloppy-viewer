@@ -14,7 +14,7 @@ int main(int argc, char** argv)
     argc == 2 && (std::strcmp(argv[1], "-h") == 0 || std::strcmp(argv[1], "--help") == 0);
   if (argc > 2 || wantsHelp)
   {
-    std::fprintf(wantsHelp ? stdout : stderr, "Usage: stepview [file.step|file.stp]\n");
+    std::fprintf(wantsHelp ? stdout : stderr, "Usage: your-sloppy-viewer [file.step|file.stp]\n");
     return wantsHelp ? EXIT_SUCCESS : EXIT_FAILURE;
   }
 
@@ -25,11 +25,11 @@ int main(int argc, char** argv)
   }
   catch (const Standard_Failure& failure)
   {
-    std::fprintf(stderr, "stepview: OpenCascade error: %s\n", failure.GetMessageString());
+    std::fprintf(stderr, "your-sloppy-viewer: OpenCascade error: %s\n", failure.GetMessageString());
   }
   catch (const std::exception& error)
   {
-    std::fprintf(stderr, "stepview: %s\n", error.what());
+    std::fprintf(stderr, "your-sloppy-viewer: %s\n", error.what());
   }
   return EXIT_FAILURE;
 }

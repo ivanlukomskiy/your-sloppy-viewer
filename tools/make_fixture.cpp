@@ -47,7 +47,7 @@ int main(int argc, char** argv)
     BRepPrimAPI_MakeTorus(gp_Ax2(gp_Pnt(0.0, 0.0, 46.0), gp::DZ()), 18.0, 4.0).Shape();
   const TopoDS_Shape knob = BRepPrimAPI_MakeSphere(gp_Pnt(0.0, 0.0, 58.0), 11.0).Shape();
 
-  Handle(TDocStd_Document) document = new TDocStd_Document("StepViewFixture");
+  Handle(TDocStd_Document) document = new TDocStd_Document("XCAF");
   Handle(XCAFDoc_ShapeTool) shapes = XCAFDoc_DocumentTool::ShapeTool(document->Main());
   Handle(XCAFDoc_ColorTool) colors = XCAFDoc_DocumentTool::ColorTool(document->Main());
 

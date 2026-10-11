@@ -19,7 +19,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE
 //
-// Adapted for StepView from samples/glfw/GlfwOcctWindow.h (OCCT 7.9.3).
+// Adapted for Your Sloppy Viewer from samples/glfw/GlfwOcctWindow.h (OCCT 7.9.3).
 
 #pragma once
 

@@ -24,11 +24,11 @@ struct App::LoadJob
 
 namespace
 {
-constexpr const char* kAppName = "StepView";
+constexpr const char* kAppName = "Your Sloppy Viewer";
 
 void onGlfwError(int code, const char* description)
 {
-  std::fprintf(stderr, "stepview: GLFW error %d: %s\n", code, description);
+  std::fprintf(stderr, "your-sloppy-viewer: GLFW error %d: %s\n", code, description);
 }
 }
 
@@ -55,8 +55,8 @@ App::App()
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
   glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
-  glfwWindowHintString(GLFW_X11_CLASS_NAME, "stepview");
-  glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "stepview");
+  glfwWindowHintString(GLFW_X11_CLASS_NAME, "your-sloppy-viewer");
+  glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "your-sloppy-viewer");
 
   window_ = new GlfwOcctWindow(1100, 720, kAppName);
   GLFWwindow* window = window_->Glfw();
@@ -149,7 +149,7 @@ void App::finishLoad()
 
   if (!job->result.model)
   {
-    std::fprintf(stderr, "stepview: cannot open '%s': %s\n", job->path.c_str(),
+    std::fprintf(stderr, "your-sloppy-viewer: cannot open '%s': %s\n", job->path.c_str(),
                  job->result.error.c_str());
     viewer_->setStatus(Viewer::Status::Error, "Cannot open " + job->name + ": " + job->result.error);
     updateTitle();

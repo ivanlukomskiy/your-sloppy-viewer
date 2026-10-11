@@ -7,6 +7,7 @@
 #include <epoxy/gl.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -31,6 +32,12 @@ const char* kStyleSheet = R"(
   padding: 14px 18px;
   border-radius: 14px;
   background-color: alpha(black, 0.55);
+}
+.dimensions-card {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background-color: alpha(black, 0.45);
+  font-feature-settings: "tnum";
 }
 .viewport-status {
   background: none;
@@ -68,6 +75,7 @@ private:
   void updateTitle();
   void redraw() { gtk_gl_area_queue_render(GTK_GL_AREA(area_)); }
   void uploadCubeLabels();
+  void updateDimensions();
 
   void setStyle(Renderer::Style style);
   const char* styleName() const;
@@ -99,6 +107,7 @@ private:
   static void changeStyle(GSimpleAction* action, GVariant* value, gpointer self);
   static void changeCube(GSimpleAction* action, GVariant* value, gpointer self);
   static void changePerspective(GSimpleAction* action, GVariant* value, gpointer self);
+  static void changeDimensions(GSimpleAction* action, GVariant* value, gpointer self);
 
   GtkWidget* window_ = nullptr;
   GtkWidget* title_ = nullptr;
@@ -108,12 +117,15 @@ private:
   GtkWidget* loadingCard_ = nullptr;
   GtkWidget* loadingLabel_ = nullptr;
   GtkWidget* loadingBar_ = nullptr;
+  GtkWidget* dimensionsCard_ = nullptr;
+  GtkWidget* dimensionValues_[3] = {};
 
   Renderer renderer_;
   Camera camera_;
   Renderer::Style style_ = Renderer::Style::ShadedEdges;
   bool cube_ = true;
   bool perspective_ = false;
+  bool dimensions_ = false;
   bool realized_ = false;
   bool fitPending_ = false;
   bool hasModel_ = false;
@@ -122,6 +134,7 @@ private:
   std::unique_ptr<LoadJob> job_;
   std::filesystem::path queued_;
   std::string currentName_;
+  std::array<double, 3> modelSize_{};
   guint progressTimer_ = 0;
 
   double cursorX_ = 0.0;
@@ -203,6 +216,7 @@ void ViewerWindow::buildHeader(GtkWidget* toolbarView)
   g_autoptr(GMenu) toggles = g_menu_new();
   g_menu_append(toggles, "Perspective", "win.perspective");
   g_menu_append(toggles, "Orientation Cube", "win.cube");
+  g_menu_append(toggles, "Dimensions", "win.dimensions");
   g_autoptr(GMenu) commands = g_menu_new();
   g_menu_append(commands, "Fit to Window", "win.fit");
   g_autoptr(GMenu) viewMenu = g_menu_new();
@@ -281,9 +295,34 @@ void ViewerWindow::buildContent(GtkWidget* toolbarView)
   gtk_widget_set_margin_bottom(loadingCard_, 16);
   gtk_widget_set_visible(loadingCard_, FALSE);
 
+  GtkWidget* dimensionsGrid = gtk_grid_new();
+  gtk_grid_set_column_spacing(GTK_GRID(dimensionsGrid), 12);
+  gtk_grid_set_row_spacing(GTK_GRID(dimensionsGrid), 2);
+  const char* axes[3] = {"X", "Y", "Z"};
+  for (int axis = 0; axis < 3; ++axis)
+  {
+    GtkWidget* name = gtk_label_new(axes[axis]);
+    gtk_widget_add_css_class(name, "dim-label");
+    dimensionValues_[axis] = gtk_label_new(nullptr);
+    gtk_label_set_xalign(GTK_LABEL(dimensionValues_[axis]), 1.0f);
+    gtk_widget_set_hexpand(dimensionValues_[axis], TRUE);
+    gtk_grid_attach(GTK_GRID(dimensionsGrid), name, 0, axis, 1, 1);
+    gtk_grid_attach(GTK_GRID(dimensionsGrid), dimensionValues_[axis], 1, axis, 1, 1);
+  }
+  dimensionsCard_ = dimensionsGrid;
+  gtk_widget_add_css_class(dimensionsCard_, "dimensions-card");
+  gtk_widget_set_halign(dimensionsCard_, GTK_ALIGN_START);
+  gtk_widget_set_valign(dimensionsCard_, GTK_ALIGN_START);
+  gtk_widget_set_margin_start(dimensionsCard_, 12);
+  gtk_widget_set_margin_top(dimensionsCard_, 12);
+  gtk_widget_set_can_target(dimensionsCard_, FALSE);
+  gtk_widget_set_tooltip_text(dimensionsCard_, "Overall size of the model");
+  gtk_widget_set_visible(dimensionsCard_, FALSE);
+
   GtkWidget* overlay = gtk_overlay_new();
   gtk_overlay_set_child(GTK_OVERLAY(overlay), area_);
   gtk_overlay_add_overlay(GTK_OVERLAY(overlay), emptyPage_);
+  gtk_overlay_add_overlay(GTK_OVERLAY(overlay), dimensionsCard_);
   gtk_overlay_add_overlay(GTK_OVERLAY(overlay), loadingCard_);
 
   GtkDropTarget* drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
@@ -309,6 +348,7 @@ void ViewerWindow::installActions()
     {"style", nullptr, "s", "'shaded-edges'", changeStyle, {}},
     {"cube", nullptr, nullptr, "true", changeCube, {}},
     {"perspective", nullptr, nullptr, "false", changePerspective, {}},
+    {"dimensions", nullptr, nullptr, "false", changeDimensions, {}},
   };
   g_action_map_add_action_entries(G_ACTION_MAP(window_), entries, G_N_ELEMENTS(entries), this);
 
@@ -316,6 +356,8 @@ void ViewerWindow::installActions()
   g_action_group_change_action_state(G_ACTION_GROUP(window_), "cube", g_variant_new_boolean(cube_));
   g_action_group_change_action_state(G_ACTION_GROUP(window_), "perspective",
                                      g_variant_new_boolean(perspective_));
+  g_action_group_change_action_state(G_ACTION_GROUP(window_), "dimensions",
+                                     g_variant_new_boolean(dimensions_));
 }
 
 void ViewerWindow::loadSettings()
@@ -342,6 +384,10 @@ void ViewerWindow::loadSettings()
   {
     perspective_ = g_key_file_get_boolean(file, "View", "perspective", nullptr);
   }
+  if (g_key_file_has_key(file, "View", "dimensions", nullptr))
+  {
+    dimensions_ = g_key_file_get_boolean(file, "View", "dimensions", nullptr);
+  }
 }
 
 void ViewerWindow::saveSettings() const
@@ -350,6 +396,7 @@ void ViewerWindow::saveSettings() const
   g_key_file_set_string(file, "View", "style", styleName());
   g_key_file_set_boolean(file, "View", "cube", cube_);
   g_key_file_set_boolean(file, "View", "perspective", perspective_);
+  g_key_file_set_boolean(file, "View", "dimensions", dimensions_);
 
   const std::filesystem::path path = settingsPath();
   std::error_code ec;
@@ -477,10 +524,12 @@ void ViewerWindow::finishLoad()
                 timings.buildMs, job->result.scene->triangleCount());
     std::fflush(stdout);
 
+    modelSize_ = job->result.scene->size;
     pendingScene_ = std::move(job->result.scene);
     currentName_ = job->name;
     hasModel_ = true;
     updateTitle();
+    updateDimensions();
     showScene();
   }
 
@@ -511,6 +560,18 @@ void ViewerWindow::updateTitle()
   adw_window_title_set_title(ADW_WINDOW_TITLE(title_), title.c_str());
   gtk_window_set_title(GTK_WINDOW(window_),
                        currentName_.empty() ? kAppName : (currentName_ + " — " + kAppName).c_str());
+}
+
+void ViewerWindow::updateDimensions()
+{
+  for (int axis = 0; axis < 3; ++axis)
+  {
+    const double value = modelSize_[axis];
+    g_autofree char* text = value >= 10000.0 ? g_strdup_printf("%.0f mm", value)
+                                             : g_strdup_printf("%.4g mm", value);
+    gtk_label_set_text(GTK_LABEL(dimensionValues_[axis]), text);
+  }
+  gtk_widget_set_visible(dimensionsCard_, dimensions_ && hasModel_);
 }
 
 void ViewerWindow::uploadCubeLabels()
@@ -858,7 +919,8 @@ void ViewerWindow::actionShortcuts(GSimpleAction*, GVariant*, gpointer self)
                                             {"Toggle edges", "e"},
                                             {"Toggle wireframe", "w"},
                                             {"Toggle perspective", "p"},
-                                            {"Toggle orientation cube", "c"}}));
+                                            {"Toggle orientation cube", "c"},
+                                            {"Toggle dimensions", "d"}}));
   adw_shortcuts_dialog_add(ADW_SHORTCUTS_DIALOG(dialog),
                            section("Standard Views", {{"Front", "1"},
                                                       {"Right", "2"},
@@ -873,7 +935,7 @@ void ViewerWindow::actionAbout(GSimpleAction*, GVariant*, gpointer self)
   AdwAboutDialog* about = ADW_ABOUT_DIALOG(dialog);
   adw_about_dialog_set_application_name(about, kAppName);
   adw_about_dialog_set_application_icon(about, kAppId);
-  adw_about_dialog_set_comments(about, "A vibecoded STEP viewer for Linux.");
+  adw_about_dialog_set_comments(about, "A STEP viewer for Linux.");
   adw_about_dialog_set_website(about, "https://github.com/ivanlukomskiy/your-sloppy-viewer");
   adw_about_dialog_set_license_type(about, GTK_LICENSE_MIT_X11);
   adw_dialog_present(dialog, GTK_WIDGET(from(self)->window_));
@@ -916,6 +978,18 @@ void ViewerWindow::changePerspective(GSimpleAction* action, GVariant* value, gpo
   {
     viewer->saveSettings();
     viewer->redraw();
+  }
+}
+
+void ViewerWindow::changeDimensions(GSimpleAction* action, GVariant* value, gpointer self)
+{
+  ViewerWindow* viewer = from(self);
+  viewer->dimensions_ = g_variant_get_boolean(value) != FALSE;
+  g_simple_action_set_state(action, value);
+  if (viewer->area_ != nullptr)
+  {
+    viewer->saveSettings();
+    viewer->updateDimensions();
   }
 }
 }

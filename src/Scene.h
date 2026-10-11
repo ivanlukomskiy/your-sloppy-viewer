@@ -19,6 +19,7 @@ struct Scene
   std::vector<float> edges;
   std::array<float, 3> boundsMin{};
   std::array<float, 3> boundsMax{};
+  std::array<double, 3> size{};
 
   std::size_t triangleCount() const { return indices.size() / 3; }
 };

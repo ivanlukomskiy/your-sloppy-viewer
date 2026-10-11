@@ -188,6 +188,18 @@ public:
     }
   }
 
+  void finish()
+  {
+    for (int axis = 0; axis < 3; ++axis)
+    {
+      const double low = extent_.CornerMin().Coord(axis + 1);
+      const double high = extent_.CornerMax().Coord(axis + 1);
+      scene_.boundsMin[axis] = static_cast<float>(low - origin_.Coord(axis + 1));
+      scene_.boundsMax[axis] = static_cast<float>(high - origin_.Coord(axis + 1));
+      scene_.size[axis] = high - low;
+    }
+  }
+
 private:
   void visit(const TopoDS_Shape& shape, Color color)
   {
@@ -248,6 +260,7 @@ private:
         point.Transform(transform);
         normal.Multiply(rotation);
       }
+      extent_.Add(point);
       const double length = normal.Modulus();
       if (length > 1.0e-12)
       {
@@ -326,6 +339,7 @@ private:
       {
         polyline_[i].Transform(transform);
       }
+      extent_.Add(polyline_[i]);
       if (i > 0)
       {
         for (const gp_Pnt* point : {&polyline_[i - 1], &polyline_[i]})
@@ -345,6 +359,7 @@ private:
   LoadProgress& progress_;
   XCAFPrs_IndexedDataMapOfShapeStyle styles_;
   std::vector<gp_Pnt> polyline_;
+  Bnd_Box extent_;
 };
 
 StepLoadResult loadChecked(const std::filesystem::path& path, LoadProgress& progress)
@@ -442,12 +457,7 @@ StepLoadResult loadChecked(const std::filesystem::path& path, LoadProgress& prog
     return fail("the file contains no displayable geometry");
   }
 
-  const gp_XYZ halfSize = (bounds.CornerMax().XYZ() - bounds.CornerMin().XYZ()) * 0.5;
-  for (int axis = 0; axis < 3; ++axis)
-  {
-    scene.boundsMin[axis] = static_cast<float>(-halfSize.Coord(axis + 1));
-    scene.boundsMax[axis] = static_cast<float>(halfSize.Coord(axis + 1));
-  }
+  sceneBuilder.finish();
   timings.buildMs = millisecondsSince(start);
 
   result.scene = std::move(scene);

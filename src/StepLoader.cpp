@@ -6,6 +6,7 @@
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <IMeshTools_Parameters.hxx>
+#include <Message_ProgressIndicator.hxx>
 #include <Poly_Triangulation.hxx>
 #include <STEPCAFControl_Reader.hxx>
 #include <Standard_Failure.hxx>
@@ -19,10 +20,13 @@
 #include <XCAFDoc_ShapeTool.hxx>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <fstream>
+#include <streambuf>
 #include <system_error>
 
 namespace
@@ -66,14 +70,85 @@ std::size_t countTriangles(const TopoDS_Shape& shape)
   return count;
 }
 
+class StageProgress : public Message_ProgressIndicator
+{
+public:
+  explicit StageProgress(LoadProgress& progress) : progress_(progress) {}
+
+  Message_ProgressRange begin(LoadProgress::Stage stage)
+  {
+    progress_.fraction.store(0.0f);
+    progress_.stage.store(stage);
+    return Start();
+  }
+
+protected:
+  void Show(const Message_ProgressScope&, const Standard_Boolean) override
+  {
+    progress_.fraction.store(static_cast<float>(GetPosition()));
+  }
+
+private:
+  LoadProgress& progress_;
+};
+
+class CountingBuffer : public std::streambuf
+{
+public:
+  CountingBuffer(std::streambuf& source, std::uintmax_t total, LoadProgress& progress)
+  : source_(source), total_(total), progress_(progress)
+  {
+  }
+
+protected:
+  int_type underflow() override
+  {
+    const std::streamsize count = source_.sgetn(buffer_.data(), buffer_.size());
+    if (count <= 0)
+    {
+      progress_.stage.store(LoadProgress::Stage::Parsing);
+      return traits_type::eof();
+    }
+    read_ += static_cast<std::uintmax_t>(count);
+    if (total_ > 0)
+    {
+      progress_.fraction.store(static_cast<float>(read_) / static_cast<float>(total_));
+    }
+    if (read_ >= total_)
+    {
+      progress_.stage.store(LoadProgress::Stage::Parsing);
+    }
+    setg(buffer_.data(), buffer_.data(), buffer_.data() + count);
+    return traits_type::to_int_type(*gptr());
+  }
+
+private:
+  std::streambuf& source_;
+  std::uintmax_t total_;
+  std::uintmax_t read_ = 0;
+  LoadProgress& progress_;
+  std::array<char, 1 << 16> buffer_;
+};
+
 StepLoadResult fail(std::string message)
 {
   return {std::nullopt, std::move(message)};
 }
 
-StepLoadResult loadChecked(const std::filesystem::path& path)
+StepLoadResult loadChecked(const std::filesystem::path& path, LoadProgress& progress)
 {
   StepModel model;
+  Handle(StageProgress) indicator = new StageProgress(progress);
+
+  std::ifstream file(path, std::ios::binary);
+  if (!file)
+  {
+    return fail("the file cannot be opened for reading");
+  }
+  std::error_code ec;
+  const std::uintmax_t fileSize = std::filesystem::file_size(path, ec);
+  CountingBuffer counting(*file.rdbuf(), ec ? 0 : fileSize, progress);
+  std::istream stream(&counting);
 
   STEPCAFControl_Reader reader;
   reader.SetColorMode(true);
@@ -82,7 +157,7 @@ StepLoadResult loadChecked(const std::filesystem::path& path)
   reader.SetPropsMode(false);
 
   auto start = Clock::now();
-  const IFSelect_ReturnStatus status = reader.ReadFile(path.c_str());
+  const IFSelect_ReturnStatus status = reader.ReadStream(path.c_str(), stream);
   model.parseMs = millisecondsSince(start);
   if (status != IFSelect_RetDone)
   {
@@ -91,7 +166,7 @@ StepLoadResult loadChecked(const std::filesystem::path& path)
 
   start = Clock::now();
   model.document = new TDocStd_Document("XCAF");
-  if (!reader.Transfer(model.document))
+  if (!reader.Transfer(model.document, indicator->begin(LoadProgress::Stage::Converting)))
   {
     return fail("the STEP entities could not be converted to geometry");
   }
@@ -136,7 +211,8 @@ StepLoadResult loadChecked(const std::filesystem::path& path)
   parameters.Deflection = model.quality.linearDeflection;
   parameters.Angle = model.quality.angularDeflection;
   parameters.InParallel = true;
-  BRepMesh_IncrementalMesh mesher(model.shape, parameters);
+  BRepMesh_IncrementalMesh mesher(model.shape, parameters,
+                                  indicator->begin(LoadProgress::Stage::Tessellating));
   model.meshMs = millisecondsSince(start);
 
   model.triangles = countTriangles(model.shape);
@@ -157,7 +233,7 @@ bool hasStepExtension(const std::filesystem::path& path)
   return extension == ".step" || extension == ".stp";
 }
 
-StepLoadResult loadStep(const std::filesystem::path& path)
+StepLoadResult loadStep(const std::filesystem::path& path, LoadProgress& progress)
 {
   std::error_code ec;
   if (!std::filesystem::exists(path, ec))
@@ -175,7 +251,7 @@ StepLoadResult loadStep(const std::filesystem::path& path)
 
   try
   {
-    return loadChecked(path);
+    return loadChecked(path, progress);
   }
   catch (const Standard_Failure& failure)
   {

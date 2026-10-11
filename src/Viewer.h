@@ -12,13 +12,16 @@
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
 
+#include <chrono>
 #include <string>
 #include <vector>
+
+class ProgressBar;
 
 class Viewer : private AIS_ViewController
 {
 public:
-  enum class Status { None, Info, Error };
+  enum class Status { None, Loading, Error };
 
   Viewer(const Handle(GlfwOcctWindow)& window, double uiScale);
   ~Viewer();
@@ -28,6 +31,7 @@ public:
 
   double show(const StepModel& model);
   void setStatus(Status kind, const std::string& text = {});
+  void setLoading(const std::string& title, float fraction);
 
   void resize();
   void invalidate();
@@ -46,8 +50,9 @@ public:
 private:
   void removeModel();
   void rebuildOverlay();
-  void addLabel(const std::string& text, const Quantity_Color& color, double height,
-                Aspect_TypeOfTriedronPosition anchor, int offsetX, int offsetY);
+  Handle(AIS_TextLabel) addLabel(const std::string& text, const Quantity_Color& color,
+                                 double height, Aspect_TypeOfTriedronPosition anchor, int offsetX,
+                                 int offsetY, bool alignLeft = false);
 
   Handle(GlfwOcctWindow) window_;
   Handle(V3d_Viewer) viewer_;
@@ -61,6 +66,10 @@ private:
   Handle(TDocStd_Document) document_;
   std::vector<Handle(AIS_InteractiveObject)> shapes_;
   std::vector<Handle(AIS_TextLabel)> labels_;
+  Handle(AIS_TextLabel) percentLabel_;
+  Handle(ProgressBar) bar_;
+  std::chrono::steady_clock::time_point loadingStart_;
+  int loadingPercent_ = -1;
 
   Status statusKind_ = Status::None;
   std::string statusText_;

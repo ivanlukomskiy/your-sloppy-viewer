@@ -18,6 +18,7 @@ struct App::LoadJob
   std::filesystem::path path;
   std::string name;
   StepLoadResult result;
+  LoadProgress progress;
   std::atomic<bool> done{false};
   std::jthread thread;
 };
@@ -107,9 +108,17 @@ int App::run(const std::filesystem::path& initialFile)
     {
       startLoad(std::exchange(pending_, {}));
     }
+    if (job_)
+    {
+      showProgress();
+    }
     if (viewer_->processEvents())
     {
       glfwPollEvents();
+    }
+    else if (job_)
+    {
+      glfwWaitEventsTimeout(0.04);
     }
     else
     {
@@ -133,13 +142,37 @@ void App::startLoad(const std::filesystem::path& path)
   job_->name = path.filename().string();
 
   glfwSetWindowTitle(window_->Glfw(), ("Loading " + job_->name + "… — " + kAppName).c_str());
-  viewer_->setStatus(Viewer::Status::Info, "Loading " + job_->name + "…");
+  showProgress();
 
   job_->thread = std::jthread([job = job_.get()] {
-    job->result = loadStep(job->path);
+    job->result = loadStep(job->path, job->progress);
     job->done.store(true);
     glfwPostEmptyEvent();
   });
+}
+
+void App::showProgress()
+{
+  const char* stage = "Reading";
+  switch (job_->progress.stage.load())
+  {
+    case LoadProgress::Stage::Reading:
+      break;
+    case LoadProgress::Stage::Parsing:
+      stage = "Parsing";
+      break;
+    case LoadProgress::Stage::Converting:
+      stage = "Converting";
+      break;
+    case LoadProgress::Stage::Tessellating:
+      stage = "Tessellating";
+      break;
+  }
+
+  const LoadProgress::Stage current = job_->progress.stage.load();
+  const float fraction =
+    current == LoadProgress::Stage::Parsing ? -1.0f : job_->progress.fraction.load();
+  viewer_->setLoading(std::string(stage) + " " + job_->name + "…", fraction);
 }
 
 void App::finishLoad()

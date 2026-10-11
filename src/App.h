@@ -29,6 +29,7 @@ private:
 
   void startLoad(const std::filesystem::path& path);
   void finishLoad();
+  void showProgress();
   void updateTitle();
 
   static App& from(GLFWwindow* window);

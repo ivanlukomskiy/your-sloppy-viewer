@@ -2,7 +2,10 @@
 
 #include <AIS_AnimationCamera.hxx>
 #include <Font_FontMgr.hxx>
+#include <Graphic3d_ArrayOfTriangles.hxx>
+#include <Graphic3d_AspectFillArea3d.hxx>
 #include <Graphic3d_Camera.hxx>
+#include <Graphic3d_Group.hxx>
 #include <Graphic3d_TransformPers.hxx>
 #include <OpenGl_GraphicDriver.hxx>
 #include <Prs3d_Drawer.hxx>
@@ -12,8 +15,110 @@
 #include <XCAFPrs_AISObject.hxx>
 #include <XCAFPrs_Style.hxx>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+
+class ProgressBar : public AIS_InteractiveObject
+{
+public:
+  ProgressBar(double width, double height) : width_(width), height_(height)
+  {
+    aspect_ = new Graphic3d_AspectFillArea3d();
+    aspect_->SetInteriorStyle(Aspect_IS_SOLID);
+    aspect_->SetShadingModel(Graphic3d_TypeOfShadingModel_Unlit);
+    SetZLayer(Graphic3d_ZLayerId_TopOSD);
+  }
+
+  double width() const { return width_; }
+  double height() const { return height_; }
+
+  void place(double x, double y)
+  {
+    originX_ = x;
+    originY_ = y;
+  }
+
+  bool setFill(double start, double end)
+  {
+    const double from = std::round(std::clamp(start, 0.0, 1.0) * width_);
+    const double to = std::max(std::round(std::clamp(end, 0.0, 1.0) * width_), from);
+    if (from == fillFrom_ && to == fillTo_)
+    {
+      return false;
+    }
+    fillFrom_ = from;
+    fillTo_ = to;
+    return true;
+  }
+
+private:
+  static constexpr int kArcSteps = 10;
+
+  Quantity_Color gradient(double x) const
+  {
+    const double t = std::clamp(x / width_, 0.0, 1.0);
+    return Quantity_Color(0.47 + (0.22 - 0.47) * t, 0.88 + (0.62 - 0.88) * t,
+                          0.38 + (0.93 - 0.38) * t, Quantity_TOC_sRGB);
+  }
+
+  Handle(Graphic3d_ArrayOfTriangles) capsule(double from, double to, const Quantity_Color* flat) const
+  {
+    const double radius = height_ * 0.5;
+    const double left = from + radius;
+    const double right = std::max(to - radius, left);
+    const int rim = 2 * (kArcSteps + 1);
+
+    Handle(Graphic3d_ArrayOfTriangles) triangles =
+      new Graphic3d_ArrayOfTriangles(rim + 1, rim * 3, false, true);
+    const auto add = [&](double x, double y) {
+      triangles->AddVertex(gp_Pnt(originX_ + x, originY_ + y, 0.0),
+                           flat != nullptr ? *flat : gradient(x));
+    };
+
+    add((left + right) * 0.5, radius);
+    for (int side = 0; side < 2; ++side)
+    {
+      const double centre = side == 0 ? right : left;
+      const double offset = side == 0 ? -M_PI_2 : M_PI_2;
+      for (int i = 0; i <= kArcSteps; ++i)
+      {
+        const double angle = offset + M_PI * i / kArcSteps;
+        add(centre + radius * std::cos(angle), radius + radius * std::sin(angle));
+      }
+    }
+    for (int i = 0; i < rim; ++i)
+    {
+      triangles->AddEdges(1, 2 + i, 2 + (i + 1) % rim);
+    }
+    return triangles;
+  }
+
+  void Compute(const Handle(PrsMgr_PresentationManager)&, const Handle(Prs3d_Presentation)& presentation,
+               const Standard_Integer) override
+  {
+    static const Quantity_Color track(0.20, 0.215, 0.24, Quantity_TOC_sRGB);
+
+    Handle(Graphic3d_Group) group = presentation->NewGroup();
+    group->SetGroupPrimitivesAspect(aspect_);
+    group->AddPrimitiveArray(capsule(0.0, width_, &track));
+    if (fillTo_ > fillFrom_)
+    {
+      const double to = std::max(fillTo_, fillFrom_ + height_);
+      group->AddPrimitiveArray(capsule(std::min(fillFrom_, width_ - height_), std::min(to, width_), nullptr));
+    }
+  }
+
+  void ComputeSelection(const Handle(SelectMgr_Selection)&, const Standard_Integer) override {}
+
+  Handle(Graphic3d_AspectFillArea3d) aspect_;
+  double width_;
+  double height_;
+  double originX_ = 0.0;
+  double originY_ = 0.0;
+  double fillFrom_ = 0.0;
+  double fillTo_ = 0.0;
+};
 
 namespace
 {
@@ -124,11 +229,14 @@ Viewer::Viewer(const Handle(GlfwOcctWindow)& window, double uiScale)
   cube_->SetTransformPersistence(new Graphic3d_TransformPers(
     Graphic3d_TMF_TriedronPers, Aspect_TOTP_RIGHT_UPPER, Graphic3d_Vec2i(cubeOffset, cubeOffset)));
 
+  bar_ = new ProgressBar(std::round(240.0 * uiScale_), std::round(8.0 * uiScale_));
+
   rebuildOverlay();
 }
 
 Viewer::~Viewer()
 {
+  context_->Remove(bar_, false);
   for (const Handle(AIS_TextLabel)& label : labels_)
   {
     context_->Remove(label, false);
@@ -182,6 +290,46 @@ void Viewer::setStatus(Status kind, const std::string& text)
   statusKind_ = kind;
   statusText_ = text;
   rebuildOverlay();
+}
+
+void Viewer::setLoading(const std::string& title, float fraction)
+{
+  if (statusKind_ != Status::Loading)
+  {
+    loadingStart_ = std::chrono::steady_clock::now();
+  }
+  if (statusKind_ != Status::Loading || statusText_ != title)
+  {
+    statusKind_ = Status::Loading;
+    statusText_ = title;
+    loadingPercent_ = -1;
+    rebuildOverlay();
+  }
+
+  double start = 0.0;
+  double end = fraction;
+  if (fraction < 0.0f)
+  {
+    const double seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - loadingStart_).count();
+    start = std::fmod(seconds * 0.8, 1.3) - 0.3;
+    end = start + 0.3;
+  }
+  if (bar_->setFill(start, end))
+  {
+    context_->Redisplay(bar_, false);
+    view_->Invalidate();
+  }
+
+  const int percent = fraction < 0.0f ? -1 : static_cast<int>(std::clamp(fraction, 0.0f, 1.0f) * 100.0f);
+  if (percent != loadingPercent_)
+  {
+    loadingPercent_ = percent;
+    const std::string text = percent < 0 ? std::string() : std::to_string(percent) + "%";
+    percentLabel_->SetText(TCollection_ExtendedString(text.c_str(), true));
+    context_->Redisplay(percentLabel_, false);
+    view_->Invalidate();
+  }
 }
 
 void Viewer::resize()
@@ -291,35 +439,61 @@ void Viewer::rebuildOverlay()
     context_->Remove(label, false);
   }
   labels_.clear();
+  percentLabel_.Nullify();
+  context_->Remove(bar_, false);
 
   const bool empty = shapes_.empty();
-  const Quantity_Color& statusColor = statusKind_ == Status::Error ? kErrorColor : kInfoColor;
   const int margin = static_cast<int>(std::lround(18.0 * uiScale_));
   const int lineGap = static_cast<int>(std::lround(16.0 * uiScale_));
+  const int barWidth = static_cast<int>(bar_->width());
+  const int barHeight = static_cast<int>(bar_->height());
+  const int percentGap = static_cast<int>(std::lround(12.0 * uiScale_));
+  const int percentLift = static_cast<int>(std::lround(1.5 * uiScale_));
 
-  if (empty && statusKind_ == Status::None)
+  if (statusKind_ == Status::Loading)
+  {
+    Aspect_TypeOfTriedronPosition anchor = Aspect_TOTP_LEFT_LOWER;
+    if (empty)
+    {
+      anchor = Aspect_TOTP_CENTER;
+      addLabel(statusText_, kInfoColor, 16.0, anchor, 0, lineGap);
+      bar_->place(-barWidth / 2, -lineGap - barHeight / 2);
+      bar_->SetTransformPersistence(new Graphic3d_TransformPers(Graphic3d_TMF_2d, anchor));
+      percentLabel_ = addLabel("", kHintColor, 13.0, anchor, barWidth / 2 + percentGap,
+                               -lineGap + percentLift, true);
+    }
+    else
+    {
+      addLabel(statusText_, kInfoColor, 14.0, anchor, margin, margin + barHeight + percentGap);
+      bar_->place(0.0, 0.0);
+      bar_->SetTransformPersistence(
+        new Graphic3d_TransformPers(Graphic3d_TMF_2d, anchor, Graphic3d_Vec2i(margin, margin)));
+      percentLabel_ = addLabel("", kHintColor, 13.0, anchor, margin + barWidth + percentGap,
+                               margin - percentLift / 2, true);
+    }
+    bar_->setFill(0.0, 0.0);
+    context_->Display(bar_, 0, -1, false);
+  }
+  else if (empty && statusKind_ == Status::None)
   {
     addLabel("Drop a STEP file here", kHintColor, 17.0, Aspect_TOTP_CENTER, 0, 0);
   }
-  else if (empty && statusKind_ == Status::Info)
-  {
-    addLabel(statusText_, statusColor, 17.0, Aspect_TOTP_CENTER, 0, 0);
-  }
   else if (empty)
   {
-    addLabel(statusText_, statusColor, 15.0, Aspect_TOTP_CENTER, 0, lineGap);
+    addLabel(statusText_, kErrorColor, 15.0, Aspect_TOTP_CENTER, 0, lineGap);
     addLabel("Drop a STEP file here", kHintColor, 15.0, Aspect_TOTP_CENTER, 0, -lineGap);
   }
-  else if (statusKind_ != Status::None)
+  else if (statusKind_ == Status::Error)
   {
-    addLabel(statusText_, statusColor, 14.0, Aspect_TOTP_LEFT_LOWER, margin, margin);
+    addLabel(statusText_, kErrorColor, 14.0, Aspect_TOTP_LEFT_LOWER, margin, margin);
   }
 
   view_->Invalidate();
 }
 
-void Viewer::addLabel(const std::string& text, const Quantity_Color& color, double height,
-                      Aspect_TypeOfTriedronPosition anchor, int offsetX, int offsetY)
+Handle(AIS_TextLabel) Viewer::addLabel(const std::string& text, const Quantity_Color& color,
+                                       double height, Aspect_TypeOfTriedronPosition anchor,
+                                       int offsetX, int offsetY, bool alignLeft)
 {
   const bool centered = anchor == Aspect_TOTP_CENTER;
 
@@ -328,7 +502,7 @@ void Viewer::addLabel(const std::string& text, const Quantity_Color& color, doub
   label->SetColor(color);
   label->SetFont(font_.ToCString());
   label->SetHeight(height * uiScale_);
-  label->SetHJustification(centered ? Graphic3d_HTA_CENTER : Graphic3d_HTA_LEFT);
+  label->SetHJustification(centered && !alignLeft ? Graphic3d_HTA_CENTER : Graphic3d_HTA_LEFT);
   label->SetVJustification(centered ? Graphic3d_VTA_CENTER : Graphic3d_VTA_BOTTOM);
   label->SetZLayer(Graphic3d_ZLayerId_TopOSD);
   if (centered)
@@ -343,4 +517,5 @@ void Viewer::addLabel(const std::string& text, const Quantity_Color& color, doub
   }
   context_->Display(label, 0, -1, false);
   labels_.push_back(label);
+  return label;
 }

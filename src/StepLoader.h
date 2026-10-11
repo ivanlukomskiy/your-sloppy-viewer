@@ -4,6 +4,7 @@
 #include <TDocStd_Document.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include <atomic>
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -33,6 +34,14 @@ struct StepLoadResult
   std::string error;
 };
 
+struct LoadProgress
+{
+  enum class Stage { Reading, Parsing, Converting, Tessellating };
+
+  std::atomic<Stage> stage{Stage::Reading};
+  std::atomic<float> fraction{0.0f};
+};
+
 bool hasStepExtension(const std::filesystem::path& path);
 
-StepLoadResult loadStep(const std::filesystem::path& path);
+StepLoadResult loadStep(const std::filesystem::path& path, LoadProgress& progress);

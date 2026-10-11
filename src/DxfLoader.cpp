@@ -37,6 +37,7 @@ struct Polyline
   std::vector<PolyVertex> vertices;
   bool closed = false;
   Color color{};
+  int layer = 0;
 };
 
 struct Arc
@@ -46,6 +47,7 @@ struct Arc
   double start = 0.0;
   double sweep = 2.0 * kPi;
   Color color{};
+  int layer = 0;
 };
 
 struct Label
@@ -59,12 +61,15 @@ struct Label
   int horizontal = 0;
   int vertical = 0;
   Color color{};
+  int layer = 0;
 };
 
 struct Layer
 {
+  std::string name;
   int color = 7;
   bool hidden = false;
+  bool used = false;
 };
 
 struct Drawing
@@ -72,7 +77,8 @@ struct Drawing
   std::vector<Polyline> polylines;
   std::vector<Arc> arcs;
   std::vector<Label> labels;
-  std::map<std::string, Layer> layers;
+  std::vector<Layer> layers;
+  std::map<std::string, int> layerIndex;
   std::map<std::string, int> skipped;
   int units = 0;
 };
@@ -342,9 +348,11 @@ private:
           }
           more = reader_.next();
         }
-        if (!name.empty())
+        if (!name.empty() && !drawing_.layerIndex.contains(name))
         {
-          drawing_.layers[name] = layer;
+          layer.name = name;
+          drawing_.layerIndex[name] = static_cast<int>(drawing_.layers.size());
+          drawing_.layers.push_back(layer);
         }
         continue;
       }
@@ -378,23 +386,26 @@ private:
     }
   }
 
-  bool visible(const Common& fields, Color& color) const
+  template <typename Entity>
+  bool place(const Common& fields, Entity& entity)
   {
     if (fields.paperSpace)
     {
       return false;
     }
-    Layer layer;
-    if (const auto found = drawing_.layers.find(fields.layer); found != drawing_.layers.end())
+    auto found = drawing_.layerIndex.find(fields.layer);
+    if (found == drawing_.layerIndex.end())
     {
-      layer = found->second;
+      Layer layer;
+      layer.name = fields.layer;
+      found = drawing_.layerIndex.emplace(fields.layer, static_cast<int>(drawing_.layers.size())).first;
+      drawing_.layers.push_back(layer);
     }
-    if (layer.hidden)
-    {
-      return false;
-    }
+    Layer& layer = drawing_.layers[static_cast<std::size_t>(found->second)];
+    layer.used = true;
     const bool own = fields.color > 0 && fields.color < kByLayer;
-    color = indexedColor(own ? fields.color : layer.color);
+    entity.color = indexedColor(own ? fields.color : layer.color);
+    entity.layer = found->second;
     return true;
   }
 
@@ -455,7 +466,7 @@ private:
       }
     }
     Polyline result;
-    if (visible(fields, result.color))
+    if (place(fields, result))
     {
       result.vertices = {{a, 0.0}, {b, 0.0}};
       drawing_.polylines.push_back(std::move(result));
@@ -491,7 +502,7 @@ private:
       result.start = startDegrees * kPi / 180.0;
       result.sweep = sweep * kPi / 180.0;
     }
-    if (result.radius > 0.0 && visible(fields, result.color))
+    if (result.radius > 0.0 && place(fields, result))
     {
       drawing_.arcs.push_back(result);
     }
@@ -539,7 +550,7 @@ private:
     {
       ++drawing_.skipped["POLYLINE (mesh)"];
     }
-    else if (result.vertices.size() >= 2 && visible(fields, result.color))
+    else if (result.vertices.size() >= 2 && place(fields, result))
     {
       drawing_.polylines.push_back(std::move(result));
     }
@@ -566,7 +577,7 @@ private:
         default: break;
       }
     }
-    if (result.vertices.size() >= 2 && visible(fields, result.color))
+    if (result.vertices.size() >= 2 && place(fields, result))
     {
       drawing_.polylines.push_back(std::move(result));
     }
@@ -594,7 +605,7 @@ private:
         default: break;
       }
     }
-    if (!result.text.empty() && result.height > 0.0 && visible(fields, result.color))
+    if (!result.text.empty() && result.height > 0.0 && place(fields, result))
     {
       drawing_.labels.push_back(std::move(result));
     }
@@ -612,6 +623,34 @@ public:
 
   void build()
   {
+    remap_.assign(drawing_.layers.size(), 0);
+    hidden_.assign(drawing_.layers.size(), false);
+    bool anyVisible = false;
+    for (std::size_t i = 0; i < drawing_.layers.size(); ++i)
+    {
+      const Layer& layer = drawing_.layers[i];
+      if (!layer.used)
+      {
+        continue;
+      }
+      remap_[i] = static_cast<std::uint8_t>(std::min<std::size_t>(scene_.layers.size(), 255));
+      hidden_[i] = layer.hidden;
+      anyVisible = anyVisible || !layer.hidden;
+      if (scene_.layers.size() < 256)
+      {
+        SceneLayer entry;
+        entry.name = layer.name;
+        const Color color = indexedColor(layer.color);
+        std::copy(color.begin(), color.end(), entry.color);
+        entry.visible = !layer.hidden;
+        scene_.layers.push_back(std::move(entry));
+      }
+    }
+    if (!anyVisible)
+    {
+      hidden_.assign(drawing_.layers.size(), false);
+    }
+
     measure();
     origin_ = {(min_.x + max_.x) * 0.5, (min_.y + max_.y) * 0.5};
     tolerance_ = std::max(std::hypot(max_.x - min_.x, max_.y - min_.y) * 1.0e-5, 1.0e-9);
@@ -628,17 +667,17 @@ public:
         const Point& to = polyline.vertices[(i + 1) % count].point;
         if (std::abs(from.bulge) < 1.0e-12)
         {
-          segment(from.point, to, polyline.color);
+          segment(from.point, to, polyline.color, polyline.layer);
         }
         else
         {
-          bulge(from.point, to, from.bulge, polyline.color);
+          bulge(from.point, to, from.bulge, polyline.color, polyline.layer);
         }
       }
     }
     for (const Arc& arc : drawing_.arcs)
     {
-      sweep(arc.center, arc.radius, arc.start, arc.sweep, arc.color);
+      sweep(arc.center, arc.radius, arc.start, arc.sweep, arc.color, arc.layer);
     }
     const Point sizeMin = min_;
     const Point sizeMax = max_;
@@ -646,7 +685,10 @@ public:
     {
       const bool aligned = label.hasAlignment && (label.horizontal != 0 || label.vertical != 0);
       const Point anchor = aligned ? label.alignment : label.insertion;
-      extend(anchor);
+      if (counts(label.layer))
+      {
+        extend(anchor);
+      }
 
       TextItem item;
       item.text = label.text;
@@ -662,6 +704,7 @@ public:
                       : label.vertical == 3 ? TextItem::Vertical::Top
                                             : TextItem::Vertical::Baseline;
       std::copy(label.color.begin(), label.color.end(), item.color);
+      item.layer = remap_[static_cast<std::size_t>(label.layer)];
       scene_.texts.push_back(std::move(item));
     }
 
@@ -675,6 +718,8 @@ public:
   }
 
 private:
+  bool counts(int layer) const { return !hidden_[static_cast<std::size_t>(layer)]; }
+
   void extend(const Point& point)
   {
     min_ = {std::min(min_.x, point.x), std::min(min_.y, point.y)};
@@ -687,25 +732,38 @@ private:
     {
       for (const PolyVertex& vertex : polyline.vertices)
       {
-        extend(vertex.point);
+        if (counts(polyline.layer))
+        {
+          extend(vertex.point);
+        }
       }
     }
     for (const Arc& arc : drawing_.arcs)
     {
-      extend({arc.center.x - arc.radius, arc.center.y - arc.radius});
-      extend({arc.center.x + arc.radius, arc.center.y + arc.radius});
+      if (counts(arc.layer))
+      {
+        extend({arc.center.x - arc.radius, arc.center.y - arc.radius});
+        extend({arc.center.x + arc.radius, arc.center.y + arc.radius});
+      }
     }
     for (const Label& label : drawing_.labels)
     {
-      extend(label.insertion);
+      if (counts(label.layer))
+      {
+        extend(label.insertion);
+      }
     }
   }
 
-  void segment(const Point& a, const Point& b, const Color& color)
+  void segment(const Point& a, const Point& b, const Color& color, int layer)
   {
-    extend(a);
-    extend(b);
+    if (counts(layer))
+    {
+      extend(a);
+      extend(b);
+    }
     EdgeSegment edge{};
+    edge.layer = remap_[static_cast<std::size_t>(layer)];
     edge.start[0] = static_cast<float>(a.x - origin_.x);
     edge.start[1] = static_cast<float>(a.y - origin_.y);
     edge.end[0] = static_cast<float>(b.x - origin_.x);
@@ -714,7 +772,8 @@ private:
     scene_.edges.push_back(edge);
   }
 
-  void sweep(const Point& center, double radius, double start, double angle, const Color& color)
+  void sweep(const Point& center, double radius, double start, double angle, const Color& color,
+             int layer)
   {
     const double ratio = std::clamp(1.0 - tolerance_ / radius, -1.0, 1.0);
     const double step = std::clamp(2.0 * std::acos(ratio), 2.0 * kPi / 720.0, 2.0 * kPi / 12.0);
@@ -724,12 +783,12 @@ private:
     {
       const double at = start + angle * i / steps;
       const Point current{center.x + radius * std::cos(at), center.y + radius * std::sin(at)};
-      segment(previous, current, color);
+      segment(previous, current, color, layer);
       previous = current;
     }
   }
 
-  void bulge(const Point& a, const Point& b, double value, const Color& color)
+  void bulge(const Point& a, const Point& b, double value, const Color& color, int layer)
   {
     const double chord = std::hypot(b.x - a.x, b.y - a.y);
     if (chord < 1.0e-12)
@@ -741,7 +800,7 @@ private:
     const Point center{(a.x + b.x) * 0.5 - (b.y - a.y) / chord * offset,
                        (a.y + b.y) * 0.5 + (b.x - a.x) / chord * offset};
     const double radius = std::hypot(a.x - center.x, a.y - center.y);
-    sweep(center, radius, std::atan2(a.y - center.y, a.x - center.x), angle, color);
+    sweep(center, radius, std::atan2(a.y - center.y, a.x - center.x), angle, color, layer);
   }
 
   const Drawing& drawing_;
@@ -750,6 +809,8 @@ private:
   Point min_{1.0e300, 1.0e300};
   Point max_{-1.0e300, -1.0e300};
   double tolerance_ = 1.0e-6;
+  std::vector<std::uint8_t> remap_;
+  std::vector<bool> hidden_;
 };
 
 const char* unitName(int units)

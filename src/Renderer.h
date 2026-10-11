@@ -3,6 +3,7 @@
 #include "Camera.h"
 #include "Scene.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -12,6 +13,8 @@ struct TextVertex
   float position[2];
   float texCoord[2];
   std::uint8_t color[4];
+  std::uint8_t layer = 0;
+  std::uint8_t padding[3] = {};
 };
 
 struct TextLayer
@@ -35,6 +38,7 @@ public:
     Style style = Style::ShadedEdges;
     bool cube = true;
     bool flat = false;
+    std::array<int, 8> hiddenLayers{};
   };
 
   Renderer() = default;

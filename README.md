@@ -9,7 +9,7 @@ A STEP and DXF viewer for Linux. GTK 4 / libadwaita, native Wayland.
 ## Features
 
 - Opens `.step` / `.stp` models, with colours; open by file picker, drag-and-drop or command line
-- Opens simple 2D `.dxf` drawings in a flat top view (a subset of DXF only, see below)
+- Opens simple 2D `.dxf` drawings in a flat top view, with per-layer visibility (a subset of DXF only, see below)
 - Render styles: shaded with edges, shaded, wireframe
 - Orthographic and perspective projection
 - Orbit (left drag), pan (middle or right drag), zoom toward the cursor (wheel or pinch)

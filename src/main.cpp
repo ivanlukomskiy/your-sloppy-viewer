@@ -26,6 +26,7 @@ void onStartup(GApplication* application, gpointer)
   setAccels(gtkApplication, "win.perspective", {"p"});
   setAccels(gtkApplication, "win.cube", {"c"});
   setAccels(gtkApplication, "win.dimensions", {"d"});
+  setAccels(gtkApplication, "win.layers", {"l"});
   setAccels(gtkApplication, "win.view::front", {"1", "KP_1"});
   setAccels(gtkApplication, "win.view::right", {"2", "KP_2"});
   setAccels(gtkApplication, "win.view::top", {"3", "KP_3"});

@@ -66,13 +66,25 @@ const char* kEdgeVertex = R"(#version 330 core
 layout(location = 0) in vec3 aStart;
 layout(location = 1) in vec3 aEnd;
 layout(location = 2) in vec4 aColor;
+layout(location = 3) in float aLayer;
 uniform mat4 uViewProjection;
 uniform vec2 uViewport;
 uniform float uWidth;
 uniform vec3 uColor;
+uniform int uHidden[8];
+bool hiddenLayer(float layer)
+{
+  int index = int(layer + 0.5);
+  return ((uHidden[index >> 5] >> (index & 31)) & 1) != 0;
+}
 out vec3 vColor;
 void main()
 {
+  if (hiddenLayer(aLayer))
+  {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+  }
   vColor = mix(uColor, aColor.rgb, aColor.a);
   vec4 a = uViewProjection * vec4(aStart, 1.0);
   vec4 b = uViewProjection * vec4(aEnd, 1.0);
@@ -118,11 +130,23 @@ const char* kTextVertex = R"(#version 330 core
 layout(location = 0) in vec2 aPosition;
 layout(location = 1) in vec2 aTexCoord;
 layout(location = 2) in vec4 aColor;
+layout(location = 3) in float aLayer;
 uniform mat4 uViewProjection;
+uniform int uHidden[8];
+bool hiddenLayer(float layer)
+{
+  int index = int(layer + 0.5);
+  return ((uHidden[index >> 5] >> (index & 31)) & 1) != 0;
+}
 out vec2 vTexCoord;
 out vec3 vColor;
 void main()
 {
+  if (hiddenLayer(aLayer))
+  {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+  }
   vTexCoord = aTexCoord;
   vColor = aColor.rgb;
   gl_Position = uViewProjection * vec4(aPosition, 0.0, 1.0);
@@ -315,6 +339,10 @@ void Renderer::initialize()
   glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(EdgeSegment),
                         reinterpret_cast<void*>(offsetof(EdgeSegment, color)));
   glVertexAttribDivisor(2, 1);
+  glEnableVertexAttribArray(3);
+  glVertexAttribPointer(3, 1, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(EdgeSegment),
+                        reinterpret_cast<void*>(offsetof(EdgeSegment, layer)));
+  glVertexAttribDivisor(3, 1);
 
   glGenVertexArrays(1, &textArray_);
   glGenBuffers(1, &textVertices_);
@@ -329,6 +357,9 @@ void Renderer::initialize()
   glEnableVertexAttribArray(2);
   glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(TextVertex),
                         reinterpret_cast<void*>(offsetof(TextVertex, color)));
+  glEnableVertexAttribArray(3);
+  glVertexAttribPointer(3, 1, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(TextVertex),
+                        reinterpret_cast<void*>(offsetof(TextVertex, layer)));
 
   glGenVertexArrays(1, &emptyArray_);
 
@@ -531,6 +562,7 @@ void Renderer::draw(const Camera& camera, const Frame& frame)
       glUseProgram(edgeProgram_);
       glUniformMatrix4fv(glGetUniformLocation(edgeProgram_, "uViewProjection"), 1, GL_FALSE,
                          viewProjection.data());
+      glUniform1iv(glGetUniformLocation(edgeProgram_, "uHidden"), 8, frame.hiddenLayers.data());
       glUniform2f(glGetUniformLocation(edgeProgram_, "uViewport"), static_cast<float>(frame.width),
                   static_cast<float>(frame.height));
       glUniform1f(glGetUniformLocation(edgeProgram_, "uWidth"),
@@ -555,6 +587,7 @@ void Renderer::draw(const Camera& camera, const Frame& frame)
       glUseProgram(textProgram_);
       glUniformMatrix4fv(glGetUniformLocation(textProgram_, "uViewProjection"), 1, GL_FALSE,
                          viewProjection.data());
+      glUniform1iv(glGetUniformLocation(textProgram_, "uHidden"), 8, frame.hiddenLayers.data());
       glUniform1i(glGetUniformLocation(textProgram_, "uAtlas"), 0);
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, textTexture_);

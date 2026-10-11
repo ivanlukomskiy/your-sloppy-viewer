@@ -78,6 +78,8 @@ private:
   void uploadCubeLabels();
   void updateDimensions();
   void applyModelKind();
+  void rebuildLayers();
+  void updateHiddenLayers();
 
   void setStyle(Renderer::Style style);
   const char* styleName() const;
@@ -97,6 +99,9 @@ private:
   static gboolean onProgressTick(gpointer self);
   static gboolean onLoadDone(gpointer self);
   static void onFileChosen(GObject* source, GAsyncResult* result, gpointer self);
+  static void onLayerToggled(GtkCheckButton* button, gpointer self);
+  static void onShowAllLayers(GtkButton* button, gpointer self);
+  static void onHideAllLayers(GtkButton* button, gpointer self);
 
   static void actionOpen(GSimpleAction*, GVariant*, gpointer self);
   static void actionClose(GSimpleAction*, GVariant*, gpointer self);
@@ -106,6 +111,7 @@ private:
   static void actionToggleWireframe(GSimpleAction*, GVariant*, gpointer self);
   static void actionShortcuts(GSimpleAction*, GVariant*, gpointer self);
   static void actionAbout(GSimpleAction*, GVariant*, gpointer self);
+  static void actionLayers(GSimpleAction*, GVariant*, gpointer self);
   static void changeStyle(GSimpleAction* action, GVariant* value, gpointer self);
   static void changeCube(GSimpleAction* action, GVariant* value, gpointer self);
   static void changePerspective(GSimpleAction* action, GVariant* value, gpointer self);
@@ -120,6 +126,11 @@ private:
   GtkWidget* loadingLabel_ = nullptr;
   GtkWidget* loadingBar_ = nullptr;
   GtkWidget* dimensionsCard_ = nullptr;
+  GtkWidget* layersButton_ = nullptr;
+  GtkWidget* layersBox_ = nullptr;
+  std::vector<GtkWidget*> layerChecks_;
+  std::vector<SceneLayer> layers_;
+  std::array<int, 8> hiddenLayers_{};
   GtkWidget* dimensionValues_[3] = {};
   GtkWidget* dimensionNames_[3] = {};
 
@@ -234,6 +245,40 @@ void ViewerWindow::buildHeader(GtkWidget* toolbarView)
   gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(viewButton), G_MENU_MODEL(viewMenu));
   gtk_widget_set_tooltip_text(viewButton, "View Options");
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), viewButton);
+
+  GtkWidget* showAll = gtk_button_new_with_label("Show All");
+  GtkWidget* hideAll = gtk_button_new_with_label("Hide All");
+  gtk_widget_add_css_class(showAll, "flat");
+  gtk_widget_add_css_class(hideAll, "flat");
+  gtk_widget_set_hexpand(showAll, TRUE);
+  gtk_widget_set_hexpand(hideAll, TRUE);
+  g_signal_connect(showAll, "clicked", G_CALLBACK(onShowAllLayers), this);
+  g_signal_connect(hideAll, "clicked", G_CALLBACK(onHideAllLayers), this);
+  GtkWidget* layerCommands = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  gtk_box_append(GTK_BOX(layerCommands), showAll);
+  gtk_box_append(GTK_BOX(layerCommands), hideAll);
+
+  layersBox_ = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+  GtkWidget* layersScroll = gtk_scrolled_window_new();
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(layersScroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(layersScroll), TRUE);
+  gtk_scrolled_window_set_propagate_natural_width(GTK_SCROLLED_WINDOW(layersScroll), TRUE);
+  gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(layersScroll), 420);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(layersScroll), layersBox_);
+
+  GtkWidget* layersContent = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+  gtk_box_append(GTK_BOX(layersContent), layerCommands);
+  gtk_box_append(GTK_BOX(layersContent), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+  gtk_box_append(GTK_BOX(layersContent), layersScroll);
+  GtkWidget* layersPopover = gtk_popover_new();
+  gtk_popover_set_child(GTK_POPOVER(layersPopover), layersContent);
+
+  layersButton_ = gtk_menu_button_new();
+  gtk_menu_button_set_label(GTK_MENU_BUTTON(layersButton_), "Layers");
+  gtk_menu_button_set_popover(GTK_MENU_BUTTON(layersButton_), layersPopover);
+  gtk_widget_set_tooltip_text(layersButton_, "Show or hide drawing layers");
+  gtk_widget_set_visible(layersButton_, FALSE);
+  adw_header_bar_pack_end(ADW_HEADER_BAR(header), layersButton_);
 
   adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbarView), header);
 }
@@ -351,6 +396,7 @@ void ViewerWindow::installActions()
     {"toggle-wireframe", actionToggleWireframe, nullptr, nullptr, nullptr, {}},
     {"shortcuts", actionShortcuts, nullptr, nullptr, nullptr, {}},
     {"about", actionAbout, nullptr, nullptr, nullptr, {}},
+    {"layers", actionLayers, nullptr, nullptr, nullptr, {}},
     {"style", nullptr, "s", "'shaded-edges'", changeStyle, {}},
     {"cube", nullptr, nullptr, "true", changeCube, {}},
     {"perspective", nullptr, nullptr, "false", changePerspective, {}},
@@ -542,12 +588,14 @@ void ViewerWindow::finishLoad()
     modelSize_ = job->result.scene->size;
     modelUnit_ = job->result.scene->unit;
     flat_ = job->result.scene->flat;
+    layers_ = job->result.scene->layers;
     pendingScene_ = std::move(job->result.scene);
     currentName_ = job->name;
     hasModel_ = true;
     updateTitle();
     updateDimensions();
     applyModelKind();
+    rebuildLayers();
     showScene();
   }
 
@@ -591,6 +639,67 @@ void ViewerWindow::applyModelKind()
   {
     g_simple_action_set_enabled(G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(window_), name)),
                                 !flat_);
+  }
+}
+
+void ViewerWindow::rebuildLayers()
+{
+  for (GtkWidget* check : layerChecks_)
+  {
+    gtk_box_remove(GTK_BOX(layersBox_), check);
+  }
+  layerChecks_.clear();
+
+  for (const SceneLayer& layer : layers_)
+  {
+    g_autofree char* markup = g_markup_printf_escaped("<span foreground=\"#%02x%02x%02x\">●</span>  %s",
+                                                      layer.color[0], layer.color[1], layer.color[2],
+                                                      layer.name.c_str());
+    GtkWidget* label = gtk_label_new(nullptr);
+    gtk_label_set_markup(GTK_LABEL(label), markup);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+    GtkWidget* check = gtk_check_button_new();
+    gtk_check_button_set_child(GTK_CHECK_BUTTON(check), label);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(check), layer.visible);
+    g_signal_connect(check, "toggled", G_CALLBACK(onLayerToggled), this);
+    gtk_box_append(GTK_BOX(layersBox_), check);
+    layerChecks_.push_back(check);
+  }
+  gtk_widget_set_visible(layersButton_, flat_ && !layers_.empty());
+  updateHiddenLayers();
+}
+
+void ViewerWindow::updateHiddenLayers()
+{
+  hiddenLayers_.fill(0);
+  for (std::size_t i = 0; i < layerChecks_.size() && i < 256; ++i)
+  {
+    if (!gtk_check_button_get_active(GTK_CHECK_BUTTON(layerChecks_[i])))
+    {
+      hiddenLayers_[i >> 5] |= static_cast<int>(1u << (i & 31));
+    }
+  }
+  redraw();
+}
+
+void ViewerWindow::onLayerToggled(GtkCheckButton*, gpointer self)
+{
+  from(self)->updateHiddenLayers();
+}
+
+void ViewerWindow::onShowAllLayers(GtkButton*, gpointer self)
+{
+  for (GtkWidget* check : from(self)->layerChecks_)
+  {
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(check), TRUE);
+  }
+}
+
+void ViewerWindow::onHideAllLayers(GtkButton*, gpointer self)
+{
+  for (GtkWidget* check : from(self)->layerChecks_)
+  {
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(check), FALSE);
   }
 }
 
@@ -711,6 +820,7 @@ gboolean ViewerWindow::onRender(GtkGLArea* area, GdkGLContext*, gpointer self)
   frame.style = viewer->style_;
   frame.cube = viewer->cube_;
   frame.flat = viewer->flat_;
+  frame.hiddenLayers = viewer->hiddenLayers_;
   viewer->renderer_.draw(viewer->camera_, frame);
   return TRUE;
 }
@@ -957,13 +1067,22 @@ void ViewerWindow::actionShortcuts(GSimpleAction*, GVariant*, gpointer self)
                                             {"Toggle wireframe", "w"},
                                             {"Toggle perspective", "p"},
                                             {"Toggle orientation cube", "c"},
-                                            {"Toggle dimensions", "d"}}));
+                                            {"Toggle dimensions", "d"},
+                                            {"Layers (drawings)", "l"}}));
   adw_shortcuts_dialog_add(ADW_SHORTCUTS_DIALOG(dialog),
                            section("Standard Views", {{"Front", "1"},
                                                       {"Right", "2"},
                                                       {"Top", "3"},
                                                       {"Isometric", "0"}}));
   adw_dialog_present(dialog, GTK_WIDGET(from(self)->window_));
+}
+
+void ViewerWindow::actionLayers(GSimpleAction*, GVariant*, gpointer self)
+{
+  if (gtk_widget_get_visible(from(self)->layersButton_))
+  {
+    gtk_menu_button_popup(GTK_MENU_BUTTON(from(self)->layersButton_));
+  }
 }
 
 void ViewerWindow::actionAbout(GSimpleAction*, GVariant*, gpointer self)

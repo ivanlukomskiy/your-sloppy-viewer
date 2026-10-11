@@ -37,6 +37,7 @@ int main(int argc, char** argv)
     else if (option == "top") eye = {0.0, 0.0, 1.0};
     else if (option == "persp") perspective = true;
     else if (option == "nocube") frame.cube = false;
+    else if (option.starts_with("hide=")) { const int layer = std::atoi(option.c_str() + 5); frame.hiddenLayers[layer >> 5] |= 1 << (layer & 31); }
     else if (option == "2x") { frame.width *= 2; frame.height *= 2; frame.scale = 2.0f; }
   }
 

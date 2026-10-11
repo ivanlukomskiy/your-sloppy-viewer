@@ -163,12 +163,13 @@ TextLayer buildTextLayer(const Scene& scene)
     const double v1 = static_cast<double>(glyphs.y + glyphs.height) / layer.height;
 
     const auto vertex = [&](double x, double y, double u, double v) {
-      TextVertex result;
+      TextVertex result{};
       result.position[0] = static_cast<float>(item.x + (x * cosine - y * sine) * scale);
       result.position[1] = static_cast<float>(item.y + (x * sine + y * cosine) * scale);
       result.texCoord[0] = static_cast<float>(u);
       result.texCoord[1] = static_cast<float>(v);
       std::copy(item.color, item.color + 4, result.color);
+      result.layer = item.layer;
       layer.vertices.push_back(result);
     };
     vertex(left, bottom, u0, v1);

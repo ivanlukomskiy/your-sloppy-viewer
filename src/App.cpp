@@ -233,6 +233,9 @@ void App::onMouseButton(GLFWwindow* window, int button, int action, int)
     case GLFW_MOUSE_BUTTON_MIDDLE:
       mapped = Aspect_VKeyMouse_MiddleButton;
       break;
+    case GLFW_MOUSE_BUTTON_RIGHT:
+      mapped = Aspect_VKeyMouse_RightButton;
+      break;
     default:
       return;
   }

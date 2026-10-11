@@ -38,7 +38,7 @@ the default application for STEP files. `make uninstall` removes the installed f
 | Input              | Action                              |
 | ------------------ | ----------------------------------- |
 | Left drag          | Orbit (Z stays up)                  |
-| Middle drag        | Pan                                 |
+| Middle or right drag | Pan                               |
 | Wheel              | Zoom toward the cursor              |
 | `F`                | Fit model to window                 |
 | `E`                | Toggle CAD edges                    |

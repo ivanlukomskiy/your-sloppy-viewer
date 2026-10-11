@@ -104,6 +104,7 @@ Viewer::Viewer(const Handle(GlfwOcctWindow)& window, double uiScale)
   gestures.Clear();
   gestures.Bind(Aspect_VKeyMouse_LeftButton, AIS_MouseGesture_RotateOrbit);
   gestures.Bind(Aspect_VKeyMouse_MiddleButton, AIS_MouseGesture_Pan);
+  gestures.Bind(Aspect_VKeyMouse_RightButton, AIS_MouseGesture_Pan);
   SetLockOrbitZUp(true);
   SetShowRotateCenter(false);
   SetShowPanAnchorPoint(false);

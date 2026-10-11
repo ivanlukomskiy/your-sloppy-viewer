@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Your Sloppy Viewer
-Comment=View STEP CAD models
+Comment=View STEP models and DXF drawings
 Exec=@BINDIR@/your-sloppy-viewer %f
 Icon=io.github.ivanlukomskiy.YourSloppyViewer
 Terminal=false
 Categories=Graphics;3DGraphics;Viewer;
-MimeType=model/step;
+MimeType=model/step;image/vnd.dxf;

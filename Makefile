@@ -30,7 +30,7 @@ install: build
 	update-mime-database $(DATADIR)/mime
 	update-desktop-database $(DATADIR)/applications
 	-gtk-update-icon-cache -q -f -t $(DATADIR)/icons/hicolor
-	xdg-mime default $(APP_ID).desktop model/step
+	xdg-mime default $(APP_ID).desktop model/step image/vnd.dxf
 
 uninstall:
 	rm -f $(BINDIR)/your-sloppy-viewer

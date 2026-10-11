@@ -138,9 +138,9 @@ void releaseFreedMemory()
 #endif
 }
 
-StepLoadResult fail(std::string message)
+LoadResult fail(std::string message)
 {
-  StepLoadResult result;
+  LoadResult result;
   result.error = std::move(message);
   return result;
 }
@@ -342,12 +342,14 @@ private:
       extent_.Add(polyline_[i]);
       if (i > 0)
       {
-        for (const gp_Pnt* point : {&polyline_[i - 1], &polyline_[i]})
+        EdgeSegment segment{};
+        for (int axis = 0; axis < 3; ++axis)
         {
-          scene_.edges.push_back(static_cast<float>(point->X() - origin_.X()));
-          scene_.edges.push_back(static_cast<float>(point->Y() - origin_.Y()));
-          scene_.edges.push_back(static_cast<float>(point->Z() - origin_.Z()));
+          segment.start[axis] =
+            static_cast<float>(polyline_[i - 1].Coord(axis + 1) - origin_.Coord(axis + 1));
+          segment.end[axis] = static_cast<float>(polyline_[i].Coord(axis + 1) - origin_.Coord(axis + 1));
         }
+        scene_.edges.push_back(segment);
       }
     }
   }
@@ -362,9 +364,9 @@ private:
   Bnd_Box extent_;
 };
 
-StepLoadResult loadChecked(const std::filesystem::path& path, LoadProgress& progress)
+LoadResult loadChecked(const std::filesystem::path& path, LoadProgress& progress)
 {
-  StepLoadResult result;
+  LoadResult result;
   LoadTimings& timings = result.timings;
   Handle(StageProgress) indicator = new StageProgress(progress);
 
@@ -465,33 +467,11 @@ StepLoadResult loadChecked(const std::filesystem::path& path, LoadProgress& prog
 }
 }
 
-bool hasStepExtension(const std::filesystem::path& path)
+LoadResult loadStep(const std::filesystem::path& path, LoadProgress& progress)
 {
-  std::string extension = path.extension().string();
-  std::transform(extension.begin(), extension.end(), extension.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return extension == ".step" || extension == ".stp";
-}
-
-StepLoadResult loadStep(const std::filesystem::path& path, LoadProgress& progress)
-{
-  std::error_code ec;
-  if (!std::filesystem::exists(path, ec))
-  {
-    return fail("file not found");
-  }
-  if (!std::filesystem::is_regular_file(path, ec))
-  {
-    return fail("not a regular file");
-  }
-  if (!hasStepExtension(path))
-  {
-    return fail("unsupported file type (expected .step or .stp)");
-  }
-
   try
   {
-    StepLoadResult result = loadChecked(path, progress);
+    LoadResult result = loadChecked(path, progress);
     releaseFreedMemory();
     return result;
   }

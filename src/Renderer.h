@@ -5,6 +5,22 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
+
+struct TextVertex
+{
+  float position[2];
+  float texCoord[2];
+  std::uint8_t color[4];
+};
+
+struct TextLayer
+{
+  std::vector<std::uint8_t> pixels;
+  int width = 0;
+  int height = 0;
+  std::vector<TextVertex> vertices;
+};
 
 class Renderer
 {
@@ -18,6 +34,7 @@ public:
     float scale = 1.0f;
     Style style = Style::ShadedEdges;
     bool cube = true;
+    bool flat = false;
   };
 
   Renderer() = default;
@@ -32,6 +49,7 @@ public:
   bool hasScene() const { return hasScene_; }
 
   void setCubeLabels(const std::uint8_t* rgba, int tileSize);
+  void setTexts(const TextLayer& layer);
 
   void draw(const Camera& camera, const Frame& frame);
 
@@ -45,6 +63,7 @@ private:
   unsigned edgeProgram_ = 0;
   unsigned backgroundProgram_ = 0;
   unsigned cubeProgram_ = 0;
+  unsigned textProgram_ = 0;
 
   unsigned meshArray_ = 0;
   unsigned meshVertices_ = 0;
@@ -55,6 +74,9 @@ private:
   unsigned cubeArray_ = 0;
   unsigned cubeVertices_ = 0;
   unsigned cubeTexture_ = 0;
+  unsigned textArray_ = 0;
+  unsigned textVertices_ = 0;
+  unsigned textTexture_ = 0;
 
   unsigned framebuffer_ = 0;
   unsigned colorBuffer_ = 0;
@@ -64,6 +86,7 @@ private:
 
   int indexCount_ = 0;
   int segmentCount_ = 0;
+  int textVertexCount_ = 0;
   bool hasScene_ = false;
   bool hasCubeLabels_ = false;
 };

@@ -1,6 +1,6 @@
 #include "Camera.h"
 #include "Renderer.h"
-#include "StepLoader.h"
+#include "Loader.h"
 
 #include <epoxy/egl.h>
 #include <epoxy/gl.h>
@@ -41,7 +41,7 @@ int main(int argc, char** argv)
   }
 
   LoadProgress progress;
-  StepLoadResult result = loadStep(argv[1], progress);
+  LoadResult result = loadModel(argv[1], progress);
   if (!result.scene)
   {
     std::fprintf(stderr, "render_test: %s\n", result.error.c_str());
@@ -52,7 +52,7 @@ int main(int argc, char** argv)
               "%zu triangles, %zu vertices, %zu edge segments\n",
               result.timings.parseMs, result.timings.transferMs, result.timings.meshMs,
               result.timings.buildMs, scene.triangleCount(), scene.vertices.size(),
-              scene.edges.size() / 6);
+              scene.edges.size());
 
   EGLDisplay display = eglGetPlatformDisplayEXT(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
   if (display == EGL_NO_DISPLAY || !eglInitialize(display, nullptr, nullptr))
@@ -91,8 +91,9 @@ int main(int argc, char** argv)
   Camera camera;
   camera.setViewport(frame.width / frame.scale, frame.height / frame.scale);
   camera.setBounds(scene.boundsMin, scene.boundsMax);
-  camera.setPerspective(perspective);
-  camera.lookFrom(eye);
+  frame.flat = scene.flat;
+  camera.setPerspective(perspective && !scene.flat);
+  camera.lookFrom(scene.flat ? Vec3{0.0, 0.0, 1.0} : eye);
   camera.fit();
   renderer.draw(camera, frame);
 

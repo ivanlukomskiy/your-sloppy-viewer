@@ -16,6 +16,8 @@ pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
 
 add_library(viewer-core STATIC
   src/Camera.cpp
+  src/DxfLoader.cpp
+  src/Loader.cpp
   src/Renderer.cpp
   src/StepLoader.cpp)
 target_include_directories(viewer-core PUBLIC src)
@@ -29,6 +31,7 @@ pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk4 libadwaita-1)
 
 add_executable(your-sloppy-viewer
   src/main.cpp
+  src/TextAtlas.cpp
   src/Window.cpp)
 target_link_libraries(your-sloppy-viewer PRIVATE viewer-core PkgConfig::GTK Threads::Threads)
 target_compile_options(your-sloppy-viewer PRIVATE -Wall -Wextra)

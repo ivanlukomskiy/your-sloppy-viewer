@@ -65,11 +65,15 @@ void main()
 const char* kEdgeVertex = R"(#version 330 core
 layout(location = 0) in vec3 aStart;
 layout(location = 1) in vec3 aEnd;
+layout(location = 2) in vec4 aColor;
 uniform mat4 uViewProjection;
 uniform vec2 uViewport;
 uniform float uWidth;
+uniform vec3 uColor;
+out vec3 vColor;
 void main()
 {
+  vColor = mix(uColor, aColor.rgb, aColor.a);
   vec4 a = uViewProjection * vec4(aStart, 1.0);
   vec4 b = uViewProjection * vec4(aEnd, 1.0);
   float da = a.z + a.w;
@@ -102,11 +106,37 @@ void main()
 )";
 
 const char* kEdgeFragment = R"(#version 330 core
-uniform vec3 uColor;
+in vec3 vColor;
 out vec4 fragColor;
 void main()
 {
-  fragColor = vec4(uColor, 1.0);
+  fragColor = vec4(vColor, 1.0);
+}
+)";
+
+const char* kTextVertex = R"(#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec4 aColor;
+uniform mat4 uViewProjection;
+out vec2 vTexCoord;
+out vec3 vColor;
+void main()
+{
+  vTexCoord = aTexCoord;
+  vColor = aColor.rgb;
+  gl_Position = uViewProjection * vec4(aPosition, 0.0, 1.0);
+}
+)";
+
+const char* kTextFragment = R"(#version 330 core
+in vec2 vTexCoord;
+in vec3 vColor;
+uniform sampler2D uAtlas;
+out vec4 fragColor;
+void main()
+{
+  fragColor = vec4(vColor, texture(uAtlas, vTexCoord).r);
 }
 )";
 
@@ -251,6 +281,7 @@ void Renderer::initialize()
   edgeProgram_ = link(kEdgeVertex, kEdgeFragment);
   backgroundProgram_ = link(kBackgroundVertex, kBackgroundFragment);
   cubeProgram_ = link(kCubeVertex, kCubeFragment);
+  textProgram_ = link(kTextVertex, kTextFragment);
 
   glGenVertexArrays(1, &meshArray_);
   glGenBuffers(1, &meshVertices_);
@@ -273,12 +304,31 @@ void Renderer::initialize()
   glBindVertexArray(edgeArray_);
   glBindBuffer(GL_ARRAY_BUFFER, edgeVertices_);
   glEnableVertexAttribArray(0);
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(EdgeSegment),
+                        reinterpret_cast<void*>(offsetof(EdgeSegment, start)));
   glVertexAttribDivisor(0, 1);
   glEnableVertexAttribArray(1);
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                        reinterpret_cast<void*>(3 * sizeof(float)));
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(EdgeSegment),
+                        reinterpret_cast<void*>(offsetof(EdgeSegment, end)));
   glVertexAttribDivisor(1, 1);
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(EdgeSegment),
+                        reinterpret_cast<void*>(offsetof(EdgeSegment, color)));
+  glVertexAttribDivisor(2, 1);
+
+  glGenVertexArrays(1, &textArray_);
+  glGenBuffers(1, &textVertices_);
+  glBindVertexArray(textArray_);
+  glBindBuffer(GL_ARRAY_BUFFER, textVertices_);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(TextVertex),
+                        reinterpret_cast<void*>(offsetof(TextVertex, position)));
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(TextVertex),
+                        reinterpret_cast<void*>(offsetof(TextVertex, texCoord)));
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(TextVertex),
+                        reinterpret_cast<void*>(offsetof(TextVertex, color)));
 
   glGenVertexArrays(1, &emptyArray_);
 
@@ -300,6 +350,7 @@ void Renderer::initialize()
   glBindVertexArray(0);
 
   glGenTextures(1, &cubeTexture_);
+  glGenTextures(1, &textTexture_);
   glGenFramebuffers(1, &framebuffer_);
   glGenRenderbuffers(1, &colorBuffer_);
   glGenRenderbuffers(1, &depthBuffer_);
@@ -311,11 +362,14 @@ void Renderer::destroy()
   glDeleteProgram(edgeProgram_);
   glDeleteProgram(backgroundProgram_);
   glDeleteProgram(cubeProgram_);
-  const unsigned arrays[] = {meshArray_, edgeArray_, emptyArray_, cubeArray_};
-  glDeleteVertexArrays(4, arrays);
-  const unsigned buffers[] = {meshVertices_, meshIndices_, edgeVertices_, cubeVertices_};
-  glDeleteBuffers(4, buffers);
+  glDeleteProgram(textProgram_);
+  const unsigned arrays[] = {meshArray_, edgeArray_, emptyArray_, cubeArray_, textArray_};
+  glDeleteVertexArrays(5, arrays);
+  const unsigned buffers[] = {meshVertices_, meshIndices_, edgeVertices_, cubeVertices_, textVertices_};
+  glDeleteBuffers(5, buffers);
   glDeleteTextures(1, &cubeTexture_);
+  glDeleteTextures(1, &textTexture_);
+  textVertexCount_ = 0;
   glDeleteFramebuffers(1, &framebuffer_);
   const unsigned renderbuffers[] = {colorBuffer_, depthBuffer_};
   glDeleteRenderbuffers(2, renderbuffers);
@@ -338,12 +392,13 @@ void Renderer::setScene(const Scene& scene)
                scene.indices.data(), GL_STATIC_DRAW);
   glBindVertexArray(0);
   glBindBuffer(GL_ARRAY_BUFFER, edgeVertices_);
-  glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(scene.edges.size() * sizeof(float)),
+  glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(scene.edges.size() * sizeof(EdgeSegment)),
                scene.edges.data(), GL_STATIC_DRAW);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 
   indexCount_ = static_cast<int>(scene.indices.size());
-  segmentCount_ = static_cast<int>(scene.edges.size() / 6);
+  segmentCount_ = static_cast<int>(scene.edges.size());
+  textVertexCount_ = 0;
   hasScene_ = true;
 }
 
@@ -374,6 +429,30 @@ void Renderer::setCubeLabels(const std::uint8_t* rgba, int tileSize)
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glBindTexture(GL_TEXTURE_2D, 0);
   hasCubeLabels_ = true;
+}
+
+void Renderer::setTexts(const TextLayer& layer)
+{
+  textVertexCount_ = static_cast<int>(layer.vertices.size());
+  if (textVertexCount_ == 0)
+  {
+    return;
+  }
+  glBindBuffer(GL_ARRAY_BUFFER, textVertices_);
+  glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(layer.vertices.size() * sizeof(TextVertex)),
+               layer.vertices.data(), GL_STATIC_DRAW);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+  glBindTexture(GL_TEXTURE_2D, textTexture_);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, layer.width, layer.height, 0, GL_RED, GL_UNSIGNED_BYTE,
+               layer.pixels.data());
+  glGenerateMipmap(GL_TEXTURE_2D);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void Renderer::resizeTarget(int width, int height)
@@ -426,8 +505,8 @@ void Renderer::draw(const Camera& camera, const Frame& frame)
     const Mat4 view = camera.view();
     const Mat4 projection = camera.projection();
     const Mat4 viewProjection = multiply(projection, view);
-    const bool faces = frame.style != Style::Wireframe && indexCount_ > 0;
-    const bool edges = frame.style != Style::Shaded || indexCount_ == 0;
+    const bool faces = !frame.flat && frame.style != Style::Wireframe && indexCount_ > 0;
+    const bool edges = frame.flat || frame.style != Style::Shaded || indexCount_ == 0;
 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
@@ -455,7 +534,7 @@ void Renderer::draw(const Camera& camera, const Frame& frame)
       glUniform2f(glGetUniformLocation(edgeProgram_, "uViewport"), static_cast<float>(frame.width),
                   static_cast<float>(frame.height));
       glUniform1f(glGetUniformLocation(edgeProgram_, "uWidth"),
-                  std::max(1.0f, (onFaces ? 0.7f : 0.8f) * frame.scale));
+                  std::max(1.0f, (frame.flat ? 0.6f : onFaces ? 0.7f : 0.8f) * frame.scale));
       if (onFaces)
       {
         glUniform3f(glGetUniformLocation(edgeProgram_, "uColor"), 0.09f, 0.10f, 0.12f);
@@ -468,7 +547,24 @@ void Renderer::draw(const Camera& camera, const Frame& frame)
       glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, segmentCount_);
     }
 
-    if (frame.cube)
+    if (frame.flat && textVertexCount_ > 0)
+    {
+      glDisable(GL_DEPTH_TEST);
+      glEnable(GL_BLEND);
+      glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+      glUseProgram(textProgram_);
+      glUniformMatrix4fv(glGetUniformLocation(textProgram_, "uViewProjection"), 1, GL_FALSE,
+                         viewProjection.data());
+      glUniform1i(glGetUniformLocation(textProgram_, "uAtlas"), 0);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, textTexture_);
+      glBindVertexArray(textArray_);
+      glDrawArrays(GL_TRIANGLES, 0, textVertexCount_);
+      glBindTexture(GL_TEXTURE_2D, 0);
+      glDisable(GL_BLEND);
+    }
+
+    if (frame.cube && !frame.flat)
     {
       drawCube(camera, frame);
     }

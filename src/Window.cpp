@@ -2,7 +2,8 @@
 
 #include "Camera.h"
 #include "Renderer.h"
-#include "StepLoader.h"
+#include "Loader.h"
+#include "TextAtlas.h"
 
 #include <epoxy/gl.h>
 
@@ -48,7 +49,7 @@ struct LoadJob
 {
   std::filesystem::path path;
   std::string name;
-  StepLoadResult result;
+  LoadResult result;
   LoadProgress progress;
   std::jthread thread;
 };
@@ -76,6 +77,7 @@ private:
   void redraw() { gtk_gl_area_queue_render(GTK_GL_AREA(area_)); }
   void uploadCubeLabels();
   void updateDimensions();
+  void applyModelKind();
 
   void setStyle(Renderer::Style style);
   const char* styleName() const;
@@ -119,6 +121,7 @@ private:
   GtkWidget* loadingBar_ = nullptr;
   GtkWidget* dimensionsCard_ = nullptr;
   GtkWidget* dimensionValues_[3] = {};
+  GtkWidget* dimensionNames_[3] = {};
 
   Renderer renderer_;
   Camera camera_;
@@ -129,6 +132,8 @@ private:
   bool realized_ = false;
   bool fitPending_ = false;
   bool hasModel_ = false;
+  bool flat_ = false;
+  std::string modelUnit_ = "mm";
 
   std::optional<Scene> pendingScene_;
   std::unique_ptr<LoadJob> job_;
@@ -196,7 +201,7 @@ void ViewerWindow::buildHeader(GtkWidget* toolbarView)
 
   GtkWidget* openButton = gtk_button_new_with_label("Open");
   gtk_actionable_set_action_name(GTK_ACTIONABLE(openButton), "win.open");
-  gtk_widget_set_tooltip_text(openButton, "Open a STEP file (Ctrl+O)");
+  gtk_widget_set_tooltip_text(openButton, "Open a file (Ctrl+O)");
   adw_header_bar_pack_start(ADW_HEADER_BAR(header), openButton);
 
   g_autoptr(GMenu) mainMenu = g_menu_new();
@@ -270,7 +275,7 @@ void ViewerWindow::buildContent(GtkWidget* toolbarView)
     gtk_icon_theme_has_icon(gtk_icon_theme_get_for_display(gtk_widget_get_display(window_)), kAppId);
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(emptyPage_),
                                 hasAppIcon ? kAppId : "document-open-symbolic");
-  adw_status_page_set_title(ADW_STATUS_PAGE(emptyPage_), "Open a STEP File");
+  adw_status_page_set_title(ADW_STATUS_PAGE(emptyPage_), "Open a STEP or DXF File");
   adw_status_page_set_description(ADW_STATUS_PAGE(emptyPage_),
                                   "Drag and drop a file here, or choose one");
   GtkWidget* emptyButton = gtk_button_new_with_label("Open…");
@@ -303,6 +308,7 @@ void ViewerWindow::buildContent(GtkWidget* toolbarView)
   {
     GtkWidget* name = gtk_label_new(axes[axis]);
     gtk_widget_add_css_class(name, "dim-label");
+    dimensionNames_[axis] = name;
     dimensionValues_[axis] = gtk_label_new(nullptr);
     gtk_label_set_xalign(GTK_LABEL(dimensionValues_[axis]), 1.0f);
     gtk_widget_set_hexpand(dimensionValues_[axis], TRUE);
@@ -450,7 +456,7 @@ void ViewerWindow::startLoad(const std::filesystem::path& path)
   progressTimer_ = g_timeout_add(50, onProgressTick, this);
 
   job_->thread = std::jthread([this, job = job_.get()] {
-    job->result = loadStep(job->path, job->progress);
+    job->result = loadModel(job->path, job->progress);
     g_idle_add(onLoadDone, this);
   });
 }
@@ -519,17 +525,29 @@ void ViewerWindow::finishLoad()
   {
     const LoadTimings& timings = job->result.timings;
     std::printf("%s: parse %.1f ms | transfer %.1f ms | tessellate %.1f ms | prepare %.1f ms | "
-                "%zu triangles\n",
+                "%zu triangles, %zu line segments, %zu labels\n",
                 job->name.c_str(), timings.parseMs, timings.transferMs, timings.meshMs,
-                timings.buildMs, job->result.scene->triangleCount());
+                timings.buildMs, job->result.scene->triangleCount(), job->result.scene->edges.size(),
+                job->result.scene->texts.size());
+    if (!job->result.note.empty())
+    {
+      std::printf("%s: skipped unsupported entities: %s\n", job->name.c_str(),
+                  job->result.note.c_str());
+      AdwToast* toast = adw_toast_new("Some unsupported entities were skipped");
+      adw_toast_set_timeout(toast, 6);
+      adw_toast_overlay_add_toast(ADW_TOAST_OVERLAY(toasts_), toast);
+    }
     std::fflush(stdout);
 
     modelSize_ = job->result.scene->size;
+    modelUnit_ = job->result.scene->unit;
+    flat_ = job->result.scene->flat;
     pendingScene_ = std::move(job->result.scene);
     currentName_ = job->name;
     hasModel_ = true;
     updateTitle();
     updateDimensions();
+    applyModelKind();
     showScene();
   }
 
@@ -547,8 +565,13 @@ void ViewerWindow::showScene()
   }
   gtk_gl_area_make_current(GTK_GL_AREA(area_));
   renderer_.setScene(*pendingScene_);
+  if (pendingScene_->flat)
+  {
+    renderer_.setTexts(buildTextLayer(*pendingScene_));
+  }
   camera_.setBounds(pendingScene_->boundsMin, pendingScene_->boundsMax);
-  camera_.lookFrom({1.0, -1.0, 1.0});
+  camera_.setPerspective(perspective_ && !flat_);
+  camera_.lookFrom(flat_ ? Vec3{0.0, 0.0, 1.0} : Vec3{1.0, -1.0, 1.0});
   pendingScene_.reset();
   fitPending_ = true;
   redraw();
@@ -562,14 +585,26 @@ void ViewerWindow::updateTitle()
                        currentName_.empty() ? kAppName : (currentName_ + " — " + kAppName).c_str());
 }
 
+void ViewerWindow::applyModelKind()
+{
+  for (const char* name : {"style", "perspective", "cube", "view", "toggle-edges", "toggle-wireframe"})
+  {
+    g_simple_action_set_enabled(G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(window_), name)),
+                                !flat_);
+  }
+}
+
 void ViewerWindow::updateDimensions()
 {
   for (int axis = 0; axis < 3; ++axis)
   {
     const double value = modelSize_[axis];
-    g_autofree char* text = value >= 10000.0 ? g_strdup_printf("%.0f mm", value)
-                                             : g_strdup_printf("%.4g mm", value);
-    gtk_label_set_text(GTK_LABEL(dimensionValues_[axis]), text);
+    g_autofree char* number =
+      value >= 10000.0 ? g_strdup_printf("%.0f", value) : g_strdup_printf("%.4g", value);
+    const std::string text = modelUnit_.empty() ? std::string(number) : std::string(number) + " " + modelUnit_;
+    gtk_label_set_text(GTK_LABEL(dimensionValues_[axis]), text.c_str());
+    gtk_widget_set_visible(dimensionValues_[axis], axis < 2 || !flat_);
+    gtk_widget_set_visible(dimensionNames_[axis], axis < 2 || !flat_);
   }
   gtk_widget_set_visible(dimensionsCard_, dimensions_ && hasModel_);
 }
@@ -675,6 +710,7 @@ gboolean ViewerWindow::onRender(GtkGLArea* area, GdkGLContext*, gpointer self)
   frame.scale = static_cast<float>(viewport[3] / height);
   frame.style = viewer->style_;
   frame.cube = viewer->cube_;
+  frame.flat = viewer->flat_;
   viewer->renderer_.draw(viewer->camera_, frame);
   return TRUE;
 }
@@ -700,7 +736,7 @@ void ViewerWindow::onDragUpdate(GtkGestureDrag*, double x, double y, gpointer se
   {
     return;
   }
-  if (viewer->dragButton_ == GDK_BUTTON_PRIMARY)
+  if (viewer->dragButton_ == GDK_BUTTON_PRIMARY && !viewer->flat_)
   {
     viewer->camera_.orbit(dx, dy);
   }
@@ -715,7 +751,7 @@ void ViewerWindow::onDragEnd(GtkGestureDrag*, double x, double y, gpointer self)
 {
   ViewerWindow* viewer = from(self);
   const bool click = std::abs(x) < kClickSlop && std::abs(y) < kClickSlop;
-  if (!click || viewer->dragButton_ != GDK_BUTTON_PRIMARY || !viewer->cube_
+  if (!click || viewer->dragButton_ != GDK_BUTTON_PRIMARY || !viewer->cube_ || viewer->flat_
       || !viewer->renderer_.hasScene())
   {
     return;
@@ -776,7 +812,7 @@ gboolean ViewerWindow::onDrop(GtkDropTarget*, const GValue* value, double, doubl
     {
       continue;
     }
-    if (chosen.empty() || (hasStepExtension(name) && !hasStepExtension(chosen)))
+    if (chosen.empty() || (isSupportedFile(name) && !isSupportedFile(chosen)))
     {
       chosen = name;
     }
@@ -829,9 +865,10 @@ void ViewerWindow::onFileChosen(GObject* source, GAsyncResult* result, gpointer 
 void ViewerWindow::actionOpen(GSimpleAction*, GVariant*, gpointer self)
 {
   GtkFileFilter* step = gtk_file_filter_new();
-  gtk_file_filter_set_name(step, "STEP files");
+  gtk_file_filter_set_name(step, "STEP and DXF files");
   gtk_file_filter_add_suffix(step, "step");
   gtk_file_filter_add_suffix(step, "stp");
+  gtk_file_filter_add_suffix(step, "dxf");
   GtkFileFilter* all = gtk_file_filter_new();
   gtk_file_filter_set_name(all, "All files");
   gtk_file_filter_add_pattern(all, "*");
@@ -842,7 +879,7 @@ void ViewerWindow::actionOpen(GSimpleAction*, GVariant*, gpointer self)
   g_object_unref(all);
 
   g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
-  gtk_file_dialog_set_title(dialog, "Open STEP File");
+  gtk_file_dialog_set_title(dialog, "Open File");
   gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
   gtk_file_dialog_open(dialog, from(self)->window(), nullptr, onFileChosen, self);
 }
@@ -935,7 +972,7 @@ void ViewerWindow::actionAbout(GSimpleAction*, GVariant*, gpointer self)
   AdwAboutDialog* about = ADW_ABOUT_DIALOG(dialog);
   adw_about_dialog_set_application_name(about, kAppName);
   adw_about_dialog_set_application_icon(about, kAppId);
-  adw_about_dialog_set_comments(about, "A STEP viewer for Linux.");
+  adw_about_dialog_set_comments(about, "A STEP and DXF viewer for Linux.");
   adw_about_dialog_set_website(about, "https://github.com/ivanlukomskiy/your-sloppy-viewer");
   adw_about_dialog_set_license_type(about, GTK_LICENSE_MIT_X11);
   adw_dialog_present(dialog, GTK_WIDGET(from(self)->window_));
@@ -972,7 +1009,7 @@ void ViewerWindow::changePerspective(GSimpleAction* action, GVariant* value, gpo
 {
   ViewerWindow* viewer = from(self);
   viewer->perspective_ = g_variant_get_boolean(value) != FALSE;
-  viewer->camera_.setPerspective(viewer->perspective_);
+  viewer->camera_.setPerspective(viewer->perspective_ && !viewer->flat_);
   g_simple_action_set_state(action, value);
   if (viewer->area_ != nullptr)
   {
